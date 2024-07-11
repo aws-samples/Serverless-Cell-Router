@@ -1,0 +1,827 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Parameters:
+
+  LambdaFunctionsS3BucketParameterSCR:
+    NoEcho: "true"
+    Type: "String"
+    Description: "An Amazon S3 bucket in the same AWS-Region as the functions."
+
+  LambdaFunctionMapperS3KeyParameterSCR:
+    NoEcho: "true"
+    Type: "String"
+    Description: "The Amazon S3 key of the Mapper deployment package."
+
+  LambdaFunctionDispatcherS3KeyParameterSCR:
+    NoEcho: "true"
+    Type: "String"
+    Description: "The Amazon S3 key of the Dispatcher deployment package."
+
+  LambdaFunctionScalerS3KeyParameterSCR:
+    NoEcho: "true"
+    Type: "String"
+    Description: "The Amazon S3 key of the Scaler deployment package."
+
+  LambdaFunctionValidatorS3KeyParameterSCR:
+    NoEcho: "true"
+    Type: "String"
+    Description: "The Amazon S3 key of the Validator deployment package."
+
+  LambdaFunctionAddDynamoDBDummyItemsS3KeyParameterSCR:
+    NoEcho: "true"
+    Type: "String"
+    Description: "The Amazon S3 key of the deployment package."
+
+  CognitoDomain:
+    Type: String
+    MinLength: 3
+    MaxLength: 63
+    AllowedPattern: ^[a-z0-9](?:[a-z0-9\-]{0,61}[a-z0-9])?$
+    Description: Enter a string. Must be alpha numeric 3-63 in length.
+
+Resources:
+
+  StepFunctionsOrchestratorRoleSCR:
+    Type: "AWS::IAM::Role"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/service-role/"
+      ManagedPolicyArns:
+      - Ref: "CloudWatchLogsDeliveryAccessPolicySCR"
+      - Ref: "StepFunctionXRayAccessPolicySCR"
+      - Ref: "StepFunctionLambdaInvokeScopedAccessPolicySCR"
+      MaxSessionDuration: 3600
+      RoleName: "StepFunctionsOrchestratorRole-SCR"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "states.amazonaws.com"
+
+  LambdaDynamoAccessRoleSCR:
+    Type: "AWS::IAM::Role"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - Ref: "LambdaDynamoAccessPolicySCR"
+      - Ref: "CloudWatchLogsDeliveryAccessPolicySCR"
+      MaxSessionDuration: 3600
+      RoleName: "LambdaDynamoAccessRole-SCR"
+      Description: "Allows Lambda functions to call AWS services on your behalf."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "lambda.amazonaws.com"
+
+  ScalerLambdaRoleSCR:
+    Type: "AWS::IAM::Role"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - Ref: "LambdaDynamoAccessPolicySCR"
+      - Ref: "CloudWatchLogsDeliveryAccessPolicySCR"
+      - Ref: "SQSAccessPolicySCR"
+      MaxSessionDuration: 3600
+      RoleName: "ScalerLambdaRole-SCR"
+      Description: "Allows Lambda functions to call AWS services on your behalf."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "lambda.amazonaws.com"
+
+  APIGatewayStepFunctionRoleSCR:
+    Type: "AWS::IAM::Role"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      Path: "/"
+      ManagedPolicyArns:
+      - "arn:aws:iam::aws:policy/service-role/AmazonAPIGatewayPushToCloudWatchLogs"
+      - Ref: "APIGatewayStepFunctionAccessPolicySCR"
+      MaxSessionDuration: 3600
+      RoleName: "APIGatewayStepFunctionRole-SCR"
+      Description: "Allows API Gateway to push logs to CloudWatch Logs."
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Action: "sts:AssumeRole"
+          Effect: "Allow"
+          Principal:
+            Service: "apigateway.amazonaws.com"
+          Sid: ""
+
+  LambdaDynamoAccessPolicySCR:
+    Type: "AWS::IAM::ManagedPolicy"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ManagedPolicyName: "LambdaDynamoAccessPolicy-SCR"
+      Path: "/service-role/"
+      Description: "Allows AWS Lambda Functions to read & write DynamoDB Table"
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Resource: !Sub "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/tbl_router" 
+          Action:
+          - "dynamodb:BatchGetItem"
+          - "dynamodb:GetItem"
+          - "dynamodb:Query"
+          - "dynamodb:Scan"
+          - "dynamodb:BatchWriteItem"
+          - "dynamodb:PutItem"
+          - "dynamodb:UpdateItem"
+          Effect: "Allow"
+      Users: []
+
+  SQSAccessPolicySCR:
+    Type: "AWS::IAM::ManagedPolicy"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ManagedPolicyName: "SQSAccessPolicy-SCR"
+      Path: "/service-role/"
+      Description: "Allows AWS Lambda Functions to write SQS"
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Resource: !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:CellProvisioning" 
+          Action:
+          - "sqs:SendMessage"
+          Effect: "Allow"
+      Users: []
+
+  APIGatewayStepFunctionAccessPolicySCR:
+    Type: "AWS::IAM::ManagedPolicy"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ManagedPolicyName: "APIGatewayStepFunctionAccessPolicy-SCR"
+      Path: "/service-role/"
+      Description: "Allows Amazon API Gateway access to AWS StepFunction API"
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:orchestrator"
+          Action:
+          - "states:StartExecution"
+          Effect: "Allow"
+      Users: []
+
+  CloudWatchLogsDeliveryAccessPolicySCR:
+    Type: "AWS::IAM::ManagedPolicy"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ManagedPolicyName: "CloudWatchLogsDeliveryAccessPolicy-SCR"
+      Path: "/service-role/"
+      Description: "Allows AWS Step Functions to write execution logs to CloudWatch\
+        \ Logs on your behalf"
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Resource: "*"
+          Action:
+          - "logs:CreateLogDelivery"
+          - "logs:GetLogDelivery"
+          - "logs:UpdateLogDelivery"
+          - "logs:DeleteLogDelivery"
+          - "logs:ListLogDeliveries"
+          - "logs:PutResourcePolicy"
+          - "logs:DescribeResourcePolicies"
+          - "logs:DescribeLogGroups"
+          Effect: "Allow"
+      Users: []
+
+  StepFunctionXRayAccessPolicySCR:
+    Type: "AWS::IAM::ManagedPolicy"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ManagedPolicyName: "StepFunctionXRayAccessPolicy-SCR"
+      Path: "/service-role/"
+      Description: "Allow AWS Step Functions to call X-Ray daemon on your behalf"
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+        - Resource:
+          - "*"
+          Action:
+          - "xray:PutTraceSegments"
+          - "xray:PutTelemetryRecords"
+          - "xray:GetSamplingRules"
+          - "xray:GetSamplingTargets"
+          Effect: "Allow"
+      Users: []
+
+  StepFunctionLambdaInvokeScopedAccessPolicySCR:
+    Type: "AWS::IAM::ManagedPolicy"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ManagedPolicyName: "StepFunctionLambdaInvokeScopedAccessPolicy-SCR"
+      Path: "/service-role/"
+      Description: "Allow AWS Step Functions to invoke Lambda functions on your behalf"
+      Groups: []
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Resource:
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Mapper:*"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Scaler:*"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Dispatcher:*"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Validator:*"
+            Action:
+              - "lambda:InvokeFunction"
+            Effect: "Allow"
+          - Resource:
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Mapper"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Scaler"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Dispatcher"
+              - !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Validator"
+            Action:
+              - "lambda:InvokeFunction"
+            Effect: "Allow"
+      Users: []
+
+  DynamoDBTabletblrouterSCR:
+    Type: "AWS::DynamoDB::Table"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      SSESpecification:
+        SSEEnabled: false
+      ContributorInsightsSpecification:
+        Enabled: false
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: false
+      ProvisionedThroughput:
+        WriteCapacityUnits: 1
+        ReadCapacityUnits: 1
+      TableName: "tbl_router"
+      AttributeDefinitions:
+      - AttributeType: "S"
+        AttributeName: "cellId"
+      - AttributeType: "N"
+        AttributeName: "currentCapacity"
+      - AttributeType: "S"
+        AttributeName: "marketId"
+      BillingMode: "PROVISIONED"
+      GlobalSecondaryIndexes:
+      - IndexName: "marketId-currentCapacity-index"
+        Projection:
+          ProjectionType: "ALL"
+          NonKeyAttributes: []
+        ProvisionedThroughput:
+          WriteCapacityUnits: 1
+          ReadCapacityUnits: 1
+        KeySchema:
+        - KeyType: "HASH"
+          AttributeName: "marketId"
+        - KeyType: "RANGE"
+          AttributeName: "currentCapacity"
+        ContributorInsightsSpecification:
+          Enabled: false
+      KeySchema:
+      - KeyType: "HASH"
+        AttributeName: "marketId"
+      - KeyType: "RANGE"
+        AttributeName: "cellId"
+      ImportSourceSpecification:
+        InputCompressionType: "NONE"
+        InputFormat: "CSV"
+        S3BucketSource:
+         S3Bucket: "serverless-cell-router-lambdas-eunorth1"
+         S3KeyPrefix: "DynamoDBDataSCR.csv"
+      DeletionProtectionEnabled: false
+      TableClass: "STANDARD"
+      Tags: []
+      TimeToLiveSpecification:
+        Enabled: false
+
+  LambdaFunctionMapperSCR:
+    Type: "AWS::Lambda::Function"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      MemorySize: 128
+      Description: ""
+      TracingConfig:
+        Mode: "PassThrough"
+      Timeout: 3
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: "Auto"
+      Handler: "lambda_function.lambda_handler"
+      Code:
+        S3Bucket:
+          Ref: "LambdaFunctionsS3BucketParameterSCR"
+        S3Key:
+         Ref: "LambdaFunctionMapperS3KeyParameterSCR"
+      Role:
+        Fn::GetAtt:
+        - "LambdaDynamoAccessRoleSCR"
+        - "Arn"
+      FileSystemConfigs: []
+      FunctionName: "Mapper"
+      Runtime: "python3.12"
+      PackageType: "Zip"
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: "/aws/lambda/Mapper"
+      EphemeralStorage:
+        Size: 512
+      Tags:
+      - Value: "APG"
+        Key: "Project"
+      Architectures:
+      - "x86_64"
+
+  LogsLogGroupOrchestratorLogsSCR:
+    Type: "AWS::Logs::LogGroup"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      LogGroupClass: "STANDARD"
+      LogGroupName: "/aws/vendedlogs/states/orchestrator-Logs"
+      DataProtectionPolicy: {}
+
+  LambdaFunctionDispatcherSCR:
+    Type: "AWS::Lambda::Function"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      MemorySize: 128
+      Description: ""
+      TracingConfig:
+        Mode: "PassThrough"
+      Timeout: 3
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: "Auto"
+      Handler: "lambda_function.lambda_handler"
+      Code:
+        S3Bucket:
+           Ref: "LambdaFunctionsS3BucketParameterSCR"
+        S3Key:
+           Ref: "LambdaFunctionDispatcherS3KeyParameterSCR"
+      Role:
+        Fn::GetAtt:
+        - "LambdaDynamoAccessRoleSCR"
+        - "Arn"
+      FileSystemConfigs: []
+      FunctionName: "Dispatcher"
+      Runtime: "python3.12"
+      PackageType: "Zip"
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: "/aws/lambda/Dispatcher"
+      EphemeralStorage:
+        Size: 512
+      Tags: []
+      Architectures:
+      - "x86_64"
+
+  LambdaFunctionAddDynamoDBDummyItemsSCR:
+    Type: "AWS::Lambda::Function"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      MemorySize: 128
+      Description: ""
+      TracingConfig:
+        Mode: "PassThrough"
+      Timeout: 3
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: "Auto"
+      Handler: "lambda_function.lambda_handler"
+      Code:
+        S3Bucket:
+          Ref: "LambdaFunctionsS3BucketParameterSCR"
+        S3Key:
+          Ref: "LambdaFunctionAddDynamoDBDummyItemsS3KeyParameterSCR"
+      Role:
+        Fn::GetAtt:
+        - "LambdaDynamoAccessRoleSCR"
+        - "Arn"
+      FileSystemConfigs: []
+      FunctionName: "AddDynamoDBDummyItemsSCR"
+      Runtime: "python3.12"
+      PackageType: "Zip"
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: "/aws/lambda/AddDynamoDBDummyItems"
+      EphemeralStorage:
+        Size: 512
+      Tags:
+      - Value: "APG"
+        Key: "Project"
+      Architectures:
+      - "x86_64"
+
+  StepFunctionOrchestratorSCR:
+    Type: "AWS::StepFunctions::StateMachine"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      DefinitionString: !Sub "{\n  \"Comment\": \"A description of my state machine\",\n\
+        \  \"StartAt\": \"Choice\",\n  \"States\": {\n    \"Choice\": {\n      \"\
+        Type\": \"Choice\",\n      \"Choices\": [\n        {\n          \"Variable\"\
+        : \"$.path\",\n          \"StringMatches\": \"*/cells\",\n          \"Next\"\
+        : \"DIspatcher\"\n        },\n        {\n          \"Variable\": \"$.path\"\
+        ,\n          \"StringMatches\": \"*/validate\",\n          \"Next\": \"Validator\"\
+        \n        },\n        {\n          \"Variable\": \"$.path\",\n          \"\
+        StringMatches\": \"*/mapper\",\n          \"Next\": \"Mapper\"\n        }\n\
+        \      ],\n      \"Default\": \"Fail\"\n    },\n    \"Mapper\": {\n      \"\
+        Type\": \"Task\",\n      \"Resource\": \"arn:aws:states:::lambda:invoke\"\
+        ,\n      \"OutputPath\": \"$.Payload\",\n      \"Parameters\": {\n       \
+        \ \"Payload.$\": \"$\",\n        \"FunctionName\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Mapper\"\
+        \n      },\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\n\
+        \            \"Lambda.ServiceException\",\n            \"Lambda.AWSLambdaException\"\
+        ,\n            \"Lambda.SdkClientException\",\n            \"Lambda.TooManyRequestsException\"\
+        \n          ],\n          \"IntervalSeconds\": 1,\n          \"MaxAttempts\"\
+        : 3,\n          \"BackoffRate\": 2\n        }\n      ],\n      \"End\": true,\n\
+        \      \"Catch\": [\n        {\n          \"ErrorEquals\": [\n           \
+        \ \"States.ALL\"\n          ],\n          \"Next\": \"Fail\",\n          \"\
+        ResultPath\": null\n        }\n      ]\n    },\n    \"Fail\": {\n      \"\
+        Type\": \"Fail\"\n    },\n    \"Validator\": {\n      \"Type\": \"Task\",\n\
+        \      \"Resource\": \"arn:aws:states:::lambda:invoke\",\n      \"OutputPath\"\
+        : \"$.Payload\",\n      \"Parameters\": {\n        \"Payload.$\": \"$\",\n\
+        \        \"FunctionName\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Validator\"\
+        \n      },\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\n\
+        \            \"Lambda.ServiceException\",\n            \"Lambda.AWSLambdaException\"\
+        ,\n            \"Lambda.SdkClientException\",\n            \"Lambda.TooManyRequestsException\"\
+        \n          ],\n          \"IntervalSeconds\": 1,\n          \"MaxAttempts\"\
+        : 3,\n          \"BackoffRate\": 2\n        }\n      ],\n      \"End\": true,\n\
+        \      \"Catch\": [\n        {\n          \"ErrorEquals\": [\n           \
+        \ \"States.ALL\"\n          ],\n          \"Next\": \"Fail\"\n        }\n\
+        \      ]\n    },\n    \"DIspatcher\": {\n      \"Type\": \"Task\",\n     \
+        \ \"Resource\": \"arn:aws:states:::lambda:invoke\",\n      \"OutputPath\"\
+        : \"$.Payload\",\n      \"Parameters\": {\n        \"Payload.$\": \"$\",\n\
+        \        \"FunctionName\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Dispatcher\"\
+        \n      },\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\n\
+        \            \"Lambda.ServiceException\",\n            \"Lambda.AWSLambdaException\"\
+        ,\n            \"Lambda.SdkClientException\",\n            \"Lambda.TooManyRequestsException\"\
+        \n          ],\n          \"IntervalSeconds\": 1,\n          \"MaxAttempts\"\
+        : 3,\n          \"BackoffRate\": 2\n        }\n      ],\n      \"Next\": \"\
+        Scaler\",\n      \"Catch\": [\n        {\n          \"ErrorEquals\": [\n \
+        \           \"States.ALL\"\n          ],\n          \"Next\": \"Fail\"\n \
+        \       }\n      ]\n    },\n    \"Scaler\": {\n      \"Type\": \"Task\",\n\
+        \      \"Resource\": \"arn:aws:states:::lambda:invoke\",\n      \"Parameters\"\
+        : {\n        \"Payload.$\": \"$\",\n        \"FunctionName\": \"arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:Scaler\"\
+        \n      },\n      \"Retry\": [\n        {\n          \"ErrorEquals\": [\n\
+        \            \"Lambda.ServiceException\",\n            \"Lambda.AWSLambdaException\"\
+        ,\n            \"Lambda.SdkClientException\",\n            \"Lambda.TooManyRequestsException\"\
+        \n          ],\n          \"IntervalSeconds\": 1,\n          \"MaxAttempts\"\
+        : 3,\n          \"BackoffRate\": 2\n        }\n      ],\n      \"ResultPath\"\
+        : null,\n      \"End\": true,\n      \"Catch\": [\n        {\n          \"\
+        ErrorEquals\": [\n            \"States.ALL\"\n          ],\n          \"Next\"\
+        : \"Fail\"\n        }\n      ]\n    }\n  }\n}"
+      LoggingConfiguration:
+        IncludeExecutionData: true
+        Destinations:
+        - CloudWatchLogsLogGroup:
+            LogGroupArn:
+              Fn::GetAtt:
+              - "LogsLogGroupOrchestratorLogsSCR"
+              - "Arn"
+        Level: "ALL"
+      StateMachineName: "orchestrator"
+      RoleArn:
+        Fn::GetAtt:
+        - "StepFunctionsOrchestratorRoleSCR"
+        - "Arn"
+      Tags: []
+      StateMachineType: "EXPRESS"
+      TracingConfiguration:
+        Enabled: false
+
+  LambdaFunctionScalerSCR:
+    Type: "AWS::Lambda::Function"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      MemorySize: 128
+      Description: ""
+      TracingConfig:
+        Mode: "PassThrough"
+      Timeout: 3
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: "Auto"
+      Handler: "lambda_function.lambda_handler"
+      Code:
+        S3Bucket:
+           Ref: "LambdaFunctionsS3BucketParameterSCR"
+        S3Key:
+           Ref: "LambdaFunctionScalerS3KeyParameterSCR"
+      Role:
+        Fn::GetAtt:
+        - "ScalerLambdaRoleSCR"
+        - "Arn"
+      FileSystemConfigs: []
+      FunctionName: "Scaler"
+      Runtime: "python3.12"
+      PackageType: "Zip"
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: "/aws/lambda/Scaler"
+      EphemeralStorage:
+        Size: 512
+      Tags: []
+      Architectures:
+      - "x86_64"
+
+  LambdaFunctionValidatorSCR:
+    Type: "AWS::Lambda::Function"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      MemorySize: 128
+      Description: ""
+      TracingConfig:
+        Mode: "PassThrough"
+      Timeout: 3
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: "Auto"
+      Handler: "lambda_function.lambda_handler"
+      Code:
+        S3Bucket:
+           Ref: "LambdaFunctionsS3BucketParameterSCR"
+        S3Key:
+           Ref: "LambdaFunctionValidatorS3KeyParameterSCR"
+      Role:
+        Fn::GetAtt:
+        - "LambdaDynamoAccessRoleSCR"
+        - "Arn"
+      FileSystemConfigs: []
+      FunctionName: "Validator"
+      Runtime: "python3.12"
+      PackageType: "Zip"
+      LoggingConfig:
+        LogFormat: "Text"
+        LogGroup: "/aws/lambda/Validator"
+      EphemeralStorage:
+        Size: 512
+      Tags: []
+      Architectures:
+      - "x86_64"
+
+  UserPool:
+    Type: AWS::Cognito::UserPool
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      UsernameConfiguration: 
+        CaseSensitive: false
+      AutoVerifiedAttributes:
+        - email
+      UserPoolName: !Sub ${CognitoDomain}-user-pool
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: false
+          Required: true
+        - Name: name
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+
+  UserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      UserPoolId: !Ref UserPool
+      AllowedOAuthFlowsUserPoolClient: true
+      CallbackURLs:
+        - https://0kvccriezd.execute-api.eu-central-1.amazonaws.com/Cell_Router_Development/cells # http://localhost:3000
+      ClientName: CellRouterCogTest
+      GenerateSecret: true
+      AllowedOAuthFlows:
+        - code
+        - implicit
+      AllowedOAuthScopes:
+        - phone
+        - email
+        - openid
+        - profile
+      SupportedIdentityProviders:
+        - COGNITO
+
+  UserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      Domain: !Ref CognitoDomain
+      UserPoolId: !Ref UserPool
+
+  ApiGatewayRestApi:
+    Type: "AWS::ApiGateway::RestApi"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ApiKeySourceType: "HEADER"
+      EndpointConfiguration:
+        Types:
+        - "REGIONAL"
+      Tags: []
+      Name: "CellRouter"
+
+  ApiGatewayResource:
+    Type: AWS::ApiGateway::Resource
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'cells'
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayResourceMapper:
+    Type: AWS::ApiGateway::Resource
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'mapper'
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayResourceValidate:
+    Type: AWS::ApiGateway::Resource
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ParentId: !GetAtt ApiGatewayRestApi.RootResourceId
+      PathPart: 'validate'
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayMethod:
+    Type: AWS::ApiGateway::Method
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CogAuthorizer
+      HttpMethod: POST
+      Integration:
+        ConnectionType: INTERNET
+        IntegrationResponses:
+          - ResponseTemplates:
+              application/json: "#if($input.path('$.status').toString().equals(\"SUCCEEDED\"))\n  #set($parsedPayload = $util.parseJson($input.path('$.output')))\n    $parsedPayload.body\n#else\n#set($cause = $util.parseJson($input.path('$.cause')))\n#set($exception = $util.parseJson($cause.errorMessage))\n#if($exception.toString().contains(\"statusCode\"))\n  #set($context.responseOverride.status = $exception.statusCode)\n    $cause.errorMessage\n#else\n#set($context.responseOverride.status = 500)\n{\n \"statusCode\":500,\n \"errorType\":\"InternalServer\"\n \"message\":\"Internal Server Error\"\n}\n#end\n#end"
+            SelectionPattern: '2\d{2}'
+            StatusCode: 200
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: !Sub "#set($allParams = $input.params()) \n #define($params){ \n #foreach($type in $allParams.keySet()) \ set($params = $allParams.get($type)) \n \"$type\": \n { #foreach($paramName in $params.keySet()) \n \"$paramName\":\"$util.escapeJavaScript($params.get($paramName))\" \n #if($foreach.hasNext), \n #end \n #end \n } \n #if($foreach.hasNext), \n #end \n #end \n } \n #end \n #define($body){ \n \"body\":\"$util.escapeJavaScript($input.json('$'))\", \n \"resource\":\"$contex.resourcePath\", \n \"httpMethod\":\"$context.httpMethod\", \n \"path\": \"$context.path\", \n \"email\" : \"$context.authorizer.claims['email']\", \n \"params\":$params \n } \n #end \n {  \n \"input\": \"$util.escapeJavaScript($body)\", \n \"stateMachineArn\": \"arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:orchestrator\" \n }"
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: 
+          Fn::Join : 
+          - ""
+          - - "arn:aws:apigateway:"
+            - Ref: "AWS::Region"
+            - ":states:action/StartExecution"
+        Credentials:
+          Fn::GetAtt:
+          - "APIGatewayStepFunctionRoleSCR"
+          - "Arn" 
+        TimeoutInMillis: 29000
+      #OperationName: 'cells'
+      ResourceId: !Ref ApiGatewayResource
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayMethodMapper:
+    Type: AWS::ApiGateway::Method
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CogAuthorizer
+      HttpMethod: POST
+      Integration:
+        ConnectionType: INTERNET
+        IntegrationResponses:
+          - ResponseTemplates:
+              application/json: "#if($input.path('$.status').toString().equals(\"SUCCEEDED\"))\n  #set($parsedPayload = $util.parseJson($input.path('$.output')))\n    $parsedPayload.body\n#else\n#set($cause = $util.parseJson($input.path('$.cause')))\n#set($exception = $util.parseJson($cause.errorMessage))\n#if($exception.toString().contains(\"statusCode\"))\n  #set($context.responseOverride.status = $exception.statusCode)\n    $cause.errorMessage\n#else\n#set($context.responseOverride.status = 500)\n{\n \"statusCode\":500,\n \"errorType\":\"InternalServer\"\n \"message\":\"Internal Server Error\"\n}\n#end\n#end"
+            SelectionPattern: '2\d{2}'
+            StatusCode: 200
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: !Sub "#set($allParams = $input.params()) \n #define($params){ \n #foreach($type in $allParams.keySet()) \ set($params = $allParams.get($type)) \n \"$type\": \n { #foreach($paramName in $params.keySet()) \n \"$paramName\":\"$util.escapeJavaScript($params.get($paramName))\" \n #if($foreach.hasNext), \n #end \n #end \n } \n #if($foreach.hasNext), \n #end \n #end \n } \n #end \n #define($body){ \n \"body\":\"$util.escapeJavaScript($input.json('$'))\", \n \"resource\":\"$contex.resourcePath\", \n \"httpMethod\":\"$context.httpMethod\", \n \"path\": \"$context.path\", \n \"email\" : \"$context.authorizer.claims['email']\", \n \"params\":$params \n } \n #end \n {  \n \"input\": \"$util.escapeJavaScript($body)\", \n \"stateMachineArn\": \"arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:orchestrator\" \n }"
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: 
+          Fn::Join : 
+          - ""
+          - - "arn:aws:apigateway:"
+            - Ref: "AWS::Region"
+            - ":states:action/StartExecution"
+        Credentials:
+          Fn::GetAtt:
+          - "APIGatewayStepFunctionRoleSCR"
+          - "Arn" 
+        TimeoutInMillis: 29000
+      #OperationName: 'mapper'
+      ResourceId: !Ref ApiGatewayResourceMapper
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayMethodValidate:
+    Type: AWS::ApiGateway::Method
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      ApiKeyRequired: false
+      AuthorizationType: COGNITO_USER_POOLS
+      AuthorizerId: !Ref CogAuthorizer
+      HttpMethod: POST
+      Integration:
+        ConnectionType: INTERNET
+        IntegrationResponses:
+          - ResponseTemplates:
+              application/json: "#if($input.path('$.status').toString().equals(\"SUCCEEDED\"))\n  #set($parsedPayload = $util.parseJson($input.path('$.output')))\n    $parsedPayload.body\n#else\n#set($cause = $util.parseJson($input.path('$.cause')))\n#set($exception = $util.parseJson($cause.errorMessage))\n#if($exception.toString().contains(\"statusCode\"))\n  #set($context.responseOverride.status = $exception.statusCode)\n    $cause.errorMessage\n#else\n#set($context.responseOverride.status = 500)\n{\n \"statusCode\":500,\n \"errorType\":\"InternalServer\"\n \"message\":\"Internal Server Error\"\n}\n#end\n#end"
+            SelectionPattern: '2\d{2}'
+            StatusCode: 200
+        PassthroughBehavior: WHEN_NO_TEMPLATES
+        RequestTemplates:
+          application/json: !Sub "#set($allParams = $input.params()) \n #define($params){ \n #foreach($type in $allParams.keySet()) \ set($params = $allParams.get($type)) \n \"$type\": \n { #foreach($paramName in $params.keySet()) \n \"$paramName\":\"$util.escapeJavaScript($params.get($paramName))\" \n #if($foreach.hasNext), \n #end \n #end \n } \n #if($foreach.hasNext), \n #end \n #end \n } \n #end \n #define($body){ \n \"body\":\"$util.escapeJavaScript($input.json('$'))\", \n \"resource\":\"$contex.resourcePath\", \n \"httpMethod\":\"$context.httpMethod\", \n \"path\": \"$context.path\", \n \"email\" : \"$context.authorizer.claims['email']\", \n \"params\":$params \n } \n #end \n {  \n \"input\": \"$util.escapeJavaScript($body)\", \n \"stateMachineArn\": \"arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:orchestrator\" \n }"
+        Type: AWS
+        IntegrationHttpMethod: POST
+        Uri: 
+          Fn::Join : 
+          - ""
+          - - "arn:aws:apigateway:"
+            - Ref: "AWS::Region"
+            - ":states:action/StartExecution"
+        Credentials:
+          Fn::GetAtt:
+          - "APIGatewayStepFunctionRoleSCR"
+          - "Arn" 
+        TimeoutInMillis: 29000
+      #OperationName: 'validate'
+      ResourceId: !Ref ApiGatewayResourceValidate
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayDeployment:
+    Type: "AWS::ApiGateway::Deployment"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    DependsOn:
+      - "ApiGatewayMethod"
+    Properties:
+      RestApiId: !Ref ApiGatewayRestApi
+
+  ApiGatewayStage:
+    Type: "AWS::ApiGateway::Stage"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      DeploymentId:
+        Fn::GetAtt:
+        - "ApiGatewayDeployment"
+        - "DeploymentId"
+      StageName: "Cell_Router_Development"
+      TracingEnabled: false
+      RestApiId:
+        Ref: "ApiGatewayRestApi"
+
+  CogAuthorizer:
+    Type: AWS::ApiGateway::Authorizer
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      IdentitySource: method.request.header.authorization
+      Name: CognitoAuthorizer
+      ProviderARNs:
+        - !GetAtt UserPool.Arn
+      RestApiId: !Ref ApiGatewayRestApi
+      Type: COGNITO_USER_POOLS
+
+  SQSQueue:
+    Type: "AWS::SQS::Queue"
+    UpdateReplacePolicy: "Delete"
+    DeletionPolicy: "Delete"
+    Properties:
+      SqsManagedSseEnabled: true
+      ReceiveMessageWaitTimeSeconds: 0
+      DelaySeconds: 0
+      MessageRetentionPeriod: 345600
+      MaximumMessageSize: 262144
+      VisibilityTimeout: 30
+      QueueName: "CellProvisioning"
