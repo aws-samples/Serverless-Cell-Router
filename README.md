@@ -1,15 +1,9 @@
-## My Project
+# Serverless Cell Router
 
-TODO: Fill this README out!
+## Disclaimer 
 
-Be sure to:
+In this PoC the security measures and best practices for securing publicly exposed endpoints are not part of the example. The PoC is not production ready. 
 
-* Change the title in this README
-* Edit your repository description on GitHub
-
-## Security
-
-See [CONTRIBUTING](CONTRIBUTING.md#security-issue-notifications) for more information.
 
 ## License
 
